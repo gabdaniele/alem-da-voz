@@ -53,10 +53,10 @@ $('import').onclick=()=>$('file').click();$('file').onchange=async e=>{const fil
 
 $('status').textContent='Pronto. Clique em Ativar câmera para começar.';
 
-function offerLetter(value){letterToAdd=value;$('appendLetter').disabled=!value;$('appendLetter').textContent=value?`Adicionar “${value}” ao texto`:'Adicionar letra reconhecida'}
+function offerLetter(value){letterToAdd=value;}
 function persistText(message){try{localStorage.setItem('signflow-text-v1',$('composition').value);$('textStatus').textContent=message||'Texto salvo neste navegador.'}catch{$('textStatus').textContent='Não foi possível salvar. Copie o texto antes de fechar.'}}
 try{$('composition').value=localStorage.getItem('signflow-text-v1')||''}catch{}
-$('appendLetter').onclick=()=>submitLetter();
+$('appendLetter')?.remove();
 $('composition').oninput=()=>persistText();
 $('space').onclick=()=>{$('composition').value+=' ';persistText('Espaço adicionado.')};
 $('backspace').onclick=()=>{const letters=Array.from($('composition').value);letters.pop();$('composition').value=letters.join('');persistText('Último caractere apagado.')};
@@ -82,7 +82,7 @@ applyTheme();
 
 let commandSamples=[],pendingCommand=null,releaseKey='',releaseFrames=0;
 try{const saved=JSON.parse(localStorage.getItem('alem-confirm-gesture')||'[]');if(valid([{name:'command',samples:saved}]))commandSamples=saved;}catch{}
-function updateCommandStatus(message){$('commandStatus').textContent=message||(commandSamples.length?'Gesto de confirmação ativo. Faça uma letra e depois este gesto para adicionar.':'Nenhum gesto configurado. Capture um gesto para ativar.');$('removeCommand').disabled=!commandSamples.length;}
+function updateCommandStatus(message){$('commandStatus').textContent=message||(commandSamples.length?'Gesto de confirmação ativo. Faça uma letra e depois este gesto para salvar.':'Nenhum gesto configurado. Capture um gesto para ativar.');$('removeCommand').disabled=!commandSamples.length;}
 function predictionKey(p){return p?(p.command?'command':'letter:'+p.name):'';}
 let continuousRecognition=true,missingPredictionFrames=0;
 try{continuousRecognition=localStorage.getItem('alem-continuous')!=='false'}catch{}
@@ -113,7 +113,7 @@ function processPrediction(p){
  if(p.command&&!letterToAdd){candidate='';stableCandidateSince=0;showHold(0,'Reconheça uma letra antes de confirmar.');return}
  if(!p.command&&letterToAdd===p.name){
   candidate=key;stableCandidateSince=now;lastPredictionAt=now;
-  showHold(100,'Letra pronta. Faça o gesto de confirmação ou mude o sinal.');
+  showHold(100,'Letra pronta. Faça o gesto de confirmação para salvar ou mude o sinal.');
   return;
  }
  if(candidate!==key||!lastPredictionAt||now-lastPredictionAt>450){
@@ -128,14 +128,14 @@ function processPrediction(p){
  if(elapsed<duration||streak<3)return;
  if(p.command){submitLetter('command');return}
  recognitionSuccess();offerLetter(p.name);$('word').textContent=p.name;
- $('detail').textContent=commandSamples.length?'Letra pronta. Faça o gesto de confirmação para salvar.':'Letra pronta. Clique em Adicionar para salvar.';
+ $('detail').textContent=commandSamples.length?'Letra pronta. Faça o gesto de confirmação para salvar.':'Letra pronta. Configure seu gesto de confirmação em Configurações para salvar.';
  $('score').textContent=p.score.toFixed(2);$('bar').style.width=p.score*100+'%';
  showHold(100,'Sinal estabilizado.');
 }
 function submitLetter(source){if(!letterToAdd)return;const value=letterToAdd;releaseKey=source==='command'?'command':'letter:'+value;releaseFrames=0;$('composition').value+=value;offerLetter('');persistText(`“${value}” adicionado. Faça o próximo sinal.`);if(running)startAttempt();}
 $('captureCommand').onclick=()=>{if(!running||!latestHand||performance.now()-latestTime>750){updateCommandStatus('Ative a câmera e mostre uma mão inteira para capturar.');return;}pendingCommand=features(latestHand);const canvas=$('commandPreview'),ctx=canvas.getContext('2d'),video=$('video');canvas.width=video.videoWidth;canvas.height=video.videoHeight;ctx.save();ctx.translate(canvas.width,0);ctx.scale(-1,1);ctx.drawImage(video,0,0,canvas.width,canvas.height);ctx.restore();$('commandCaptured').hidden=false;updateCommandStatus('Confira a captura e salve para usar como confirmação.');};
-$('saveCommand').onclick=()=>{if(!pendingCommand)return;const previous=commandSamples;commandSamples=[pendingCommand];try{localStorage.setItem('alem-confirm-gesture',JSON.stringify(commandSamples));pendingCommand=null;$('commandCaptured').hidden=true;updateCommandStatus('Gesto salvo! Faça uma letra e depois este gesto para adicionar.');}catch{commandSamples=previous;updateCommandStatus('Não foi possível salvar. Tente novamente.');}};
-$('removeCommand').onclick=()=>{try{localStorage.removeItem('alem-confirm-gesture');commandSamples=[];pendingCommand=null;$('commandCaptured').hidden=true;updateCommandStatus('Gesto desativado. Você pode continuar usando o botão Adicionar.');}catch{updateCommandStatus('Não foi possível desativar o gesto.');}};
+$('saveCommand').onclick=()=>{if(!pendingCommand)return;const previous=commandSamples;commandSamples=[pendingCommand];try{localStorage.setItem('alem-confirm-gesture',JSON.stringify(commandSamples));pendingCommand=null;$('commandCaptured').hidden=true;updateCommandStatus('Gesto salvo! Faça uma letra e depois este gesto para salvar.');}catch{commandSamples=previous;updateCommandStatus('Não foi possível salvar. Tente novamente.');}};
+$('removeCommand').onclick=()=>{try{localStorage.removeItem('alem-confirm-gesture');commandSamples=[];pendingCommand=null;$('commandCaptured').hidden=true;updateCommandStatus('Gesto desativado. Configure um gesto de confirmação para salvar as letras.');}catch{updateCommandStatus('Não foi possível desativar o gesto.');}};
 updateCommandStatus();
 
 
@@ -166,4 +166,5 @@ const holdMeter=document.createElement('progress');holdMeter.id='recognitionHold
 holdMeter.max=100;holdMeter.value=0;holdMeter.setAttribute('aria-label','Estabilização do sinal');
 holdMeter.style.cssText='width:100%;height:8px;accent-color:var(--primary,#69508f)';
 holdBox.append(holdLabel,holdMeter);$('recognition').insertAdjacentElement('beforebegin',holdBox);
+
 
