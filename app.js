@@ -11,7 +11,7 @@ function stop(){endAttempt();latestHand=null;running=false;recognizing=false;if(
 $('stop').onclick=stop;window.addEventListener('pagehide',stop);
 function features(hand){const o=hand[0],scale=Math.max(.001,Math.hypot(hand[9].x-o.x,hand[9].y-o.y,hand[9].z-o.z));return hand.flatMap(p=>[(p.x-o.x)/scale,(p.y-o.y)/scale,(p.z-o.z)/scale])}
 // High-tolerance experimental matching; existing 63-coordinate samples stay compatible.
-function poseDistance(a,b,relaxed=true){
+function directPoseDistance(a,b,relaxed=true){
  let best=Infinity;
  for(const degrees of (relaxed?[-25,-12,0,12,25]:[0])){
   const angle=degrees*Math.PI/180,c=Math.cos(angle),s=Math.sin(angle);let sum=0;
@@ -22,6 +22,12 @@ function poseDistance(a,b,relaxed=true){
   best=Math.min(best,Math.sqrt(sum/63));
  }
  return best;
+}
+function poseDistance(a,b,relaxed=true){
+ const direct=directPoseDistance(a,b,relaxed);
+ if(!relaxed)return direct;
+ const mirrored=b.map((v,i)=>i%3===0?-v:v);
+ return Math.min(direct,directPoseDistance(a,mirrored,true));
 }
 function classify(f){
  if(!Array.isArray(f)||f.length!==63||!f.every(Number.isFinite))return null;
@@ -59,7 +65,7 @@ $('copyText').onclick=async()=>{try{await navigator.clipboard.writeText($('compo
 
 let attemptTimer=null;
 function endAttempt(){clearTimeout(attemptTimer);recognizing=false;$('recognition').textContent='Iniciar reconhecimento';$('cameraCard').classList.remove('searching');}
-function startAttempt(){endAttempt();resetResult();$('cameraCard').classList.remove('timeout','recognized');$('recognize').classList.remove('timeout','recognized');recognizing=true;$('cameraCard').classList.add('searching');$('recognition').textContent='Pausar reconhecimento';$('detail').textContent='Alta tolerância ativa. Mostre o sinal e confira a letra antes de adicionar.';attemptTimer=setTimeout(()=>{if(recognizing&&!letterToAdd){$('detail').textContent='Continuo procurando. Ajuste a mão; não é preciso reiniciar.';}},15000);}
+function startAttempt(){endAttempt();resetResult();$('cameraCard').classList.remove('timeout','recognized');$('recognize').classList.remove('timeout','recognized');recognizing=true;$('cameraCard').classList.add('searching');$('recognition').textContent='Pausar reconhecimento';$('detail').textContent='Versão espelhamento · Alta tolerância ativa. Mostre o sinal e confira a letra.';attemptTimer=setTimeout(()=>{if(recognizing&&!letterToAdd){$('detail').textContent='Continuo procurando. Ajuste a mão; não é preciso reiniciar.';}},15000);}
 function recognitionSuccess(){clearTimeout(attemptTimer);$('cameraCard').classList.remove('searching');$('cameraCard').classList.add('recognized');$('recognize').classList.add('recognized');$('recognition').textContent='Pausar reconhecimento';}
 const cameraHome=document.querySelector('.workspace');
 $('settingsOpen').onclick=()=>{endAttempt();$('settings').showModal();$('cameraDock').append($('cameraCard'));if(stream)$('video').play().catch(()=>{});selectPanel('signals');};
@@ -81,10 +87,10 @@ function predictionKey(p){return p?(p.command?'command':'letter:'+p.name):'';}
 function processPrediction(p){
  const key=predictionKey(p);
  if(releaseKey){if(key===releaseKey){releaseFrames=0;return}if(++releaseFrames<3)return;releaseKey='';releaseFrames=0;}
- if(!p){candidate='';streak=0;if(!letterToAdd){$('word').textContent='Aguardando um sinal';$('detail').textContent='Mostre uma letra e mantenha a pose.';}return;}
+ if(!p){candidate='';streak=0;if(!letterToAdd){$('word').textContent='Aguardando um sinal';$('detail').textContent=(latestHand?(data.some(c=>c.samples.length)?'Mão detectada, mas nenhuma referência correspondeu. Confira seus sinais salvos.':'Nenhum sinal salvo neste navegador. Importe seus dados em Configurações.'):'Mostre apenas uma mão inteira. Aguardo a detecção dos pontos.');}return;}
  if(letterToAdd&&!p.command)return;
  streak=key===candidate?streak+1:1;candidate=key;
- if(streak<(p.command?6:3))return;
+ if(streak<(p.command?6:3)){if(!letterToAdd){$('word').textContent='Analisando: '+p.name;$('detail').textContent='Mão detectada. Estabilizando o resultado…';}return;}
  if(p.command){if(letterToAdd)submitLetter('command');else{$('detail').textContent='Faça uma letra antes do gesto de confirmação.';}return;}
  recognitionSuccess();offerLetter(p.name);$('word').textContent=p.name;$('detail').textContent=commandSamples.length?'Faça seu gesto de confirmação ou clique em Adicionar.':'Clique em Adicionar para continuar automaticamente.';$('score').textContent=p.score.toFixed(2);$('bar').style.width=p.score*100+'%';
 }
@@ -93,4 +99,5 @@ $('captureCommand').onclick=()=>{if(!running||!latestHand||performance.now()-lat
 $('saveCommand').onclick=()=>{if(!pendingCommand)return;const previous=commandSamples;commandSamples=[pendingCommand];try{localStorage.setItem('alem-confirm-gesture',JSON.stringify(commandSamples));pendingCommand=null;$('commandCaptured').hidden=true;updateCommandStatus('Gesto salvo! Faça uma letra e depois este gesto para adicionar.');}catch{commandSamples=previous;updateCommandStatus('Não foi possível salvar. Tente novamente.');}};
 $('removeCommand').onclick=()=>{try{localStorage.removeItem('alem-confirm-gesture');commandSamples=[];pendingCommand=null;$('commandCaptured').hidden=true;updateCommandStatus('Gesto desativado. Você pode continuar usando o botão Adicionar.');}catch{updateCommandStatus('Não foi possível desativar o gesto.');}};
 updateCommandStatus();
+
 
