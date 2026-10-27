@@ -10,7 +10,33 @@ $('start').onclick=async()=>{const b=$('start');b.disabled=true;b.textContent='A
 function stop(){endAttempt();latestHand=null;running=false;recognizing=false;if(collect){save();collect=null;$('progress').textContent='Coleta interrompida. Exemplos já capturados foram salvos.'}cancelAnimationFrame(frame);stream?.getTracks().forEach(t=>t.stop());$('video').srcObject=null;$('placeholder').hidden=false;$('videoLabel').hidden=true;$('cameraState').textContent='● Desligada';$('stop').disabled=true;$('recognition').textContent='Iniciar reconhecimento';$('status').textContent='Sua câmera está desligada.';resetResult();render()}
 $('stop').onclick=stop;window.addEventListener('pagehide',stop);
 function features(hand){const o=hand[0],scale=Math.max(.001,Math.hypot(hand[9].x-o.x,hand[9].y-o.y,hand[9].z-o.z));return hand.flatMap(p=>[(p.x-o.x)/scale,(p.y-o.y)/scale,(p.z-o.z)/scale])}
-function classify(f){const ranks=[...data.filter(c=>c.samples.length),...(commandSamples.length?[{name:'Gesto de confirmação',samples:commandSamples,command:true}]:[])].map(c=>{const distances=c.samples.map(s=>Math.sqrt(s.reduce((a,x,i)=>a+(x-f[i])**2,0)/63)).sort((a,b)=>a-b).slice(0,5);return {name:c.name,command:!!c.command,d:distances.reduce((a,b)=>a+b,0)/distances.length}}).sort((a,b)=>a.d-b.d);if(!ranks.length||ranks[0].d>.18||(ranks.length>1&&ranks[1].d-ranks[0].d<.035))return null;return {name:ranks[0].name,command:ranks[0].command,score:Math.max(0,1-ranks[0].d/.5)}}
+// High-tolerance experimental matching; existing 63-coordinate samples stay compatible.
+function poseDistance(a,b,relaxed=true){
+ let best=Infinity;
+ for(const degrees of (relaxed?[-25,-12,0,12,25]:[0])){
+  const angle=degrees*Math.PI/180,c=Math.cos(angle),s=Math.sin(angle);let sum=0;
+  for(let i=0;i<63;i+=3){
+   const x=b[i]*c-b[i+1]*s,y=b[i]*s+b[i+1]*c;
+   sum+=(a[i]-x)**2+(a[i+1]-y)**2+(relaxed?.35:1)*(a[i+2]-b[i+2])**2;
+  }
+  best=Math.min(best,Math.sqrt(sum/63));
+ }
+ return best;
+}
+function classify(f){
+ if(!Array.isArray(f)||f.length!==63||!f.every(Number.isFinite))return null;
+ const ranks=data.filter(c=>c.samples.length).map(c=>({
+  name:c.name,command:false,d:c.samples.reduce((best,s)=>Math.min(best,poseDistance(f,s)),Infinity)
+ })).sort((a,b)=>a.d-b.d);
+ // Confirmation remains strict because it inserts text without a click.
+ const commandDistance=commandSamples.reduce((best,s)=>Math.min(best,poseDistance(f,s,false)),Infinity);
+ const strictLetterDistance=data.reduce((best,c)=>c.samples.reduce((d,s)=>Math.min(d,poseDistance(f,s,false)),best),Infinity);
+ if(commandDistance<=.18&&strictLetterDistance-commandDistance>=.035)
+  return {name:'Gesto de confirmação',command:true,score:Math.max(0,1-commandDistance/.5)};
+ if(!ranks.length||ranks[0].d>.55)return null;
+ return {name:ranks[0].name,command:false,score:Math.max(0,1-ranks[0].d/.65)};
+}
+
 const edges=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
 function loop(t){if(!running)return;try{if(t-last>90&&$('video').readyState>=2){last=t;const result=detector.detectForVideo($('video'),t),hands=result.landmarks;latestHand=hands.length===1?hands[0]:null;latestTime=t;const canvas=$('overlay');canvas.width=$('video').videoWidth;canvas.height=$('video').videoHeight;const ctx=canvas.getContext('2d');ctx.strokeStyle='#69e7ab';ctx.lineWidth=2;ctx.fillStyle='#dcffe9';for(const h of hands){for(const [a,b]of edges){ctx.beginPath();ctx.moveTo(h[a].x*canvas.width,h[a].y*canvas.height);ctx.lineTo(h[b].x*canvas.width,h[b].y*canvas.height);ctx.stroke()}for(const p of h){ctx.beginPath();ctx.arc(p.x*canvas.width,p.y*canvas.height,3,0,Math.PI*2);ctx.fill()}}$('status').textContent=hands.length===1?'Mão detectada · Mantenha a pose estável':hands.length>1?'Use apenas uma mão nesta versão.':'Posicione uma mão na área de captura.';if(recognizing)processPrediction(hands.length===1?classify(features(hands[0])):null);}}catch(e){stop();$('status').textContent='Falha no processamento. Tente ativar a câmera novamente.';return}frame=requestAnimationFrame(loop)}
 $('capture').onclick=()=>{if(!running||!latestHand||performance.now()-latestTime>750){$('progress').textContent='Nenhuma pose disponível. Mostre apenas uma mão inteira à câmera e tente novamente.';return}if(pendingPose&&!confirm('Substituir a captura ainda não salva?'))return;recognizing=false;$('recognition').textContent='Iniciar reconhecimento';pendingPose=features(latestHand);const canvas=$('posePreview'),ctx=canvas.getContext('2d'),video=$('video');canvas.width=video.videoWidth;canvas.height=video.videoHeight;ctx.save();ctx.translate(canvas.width,0);ctx.scale(-1,1);ctx.drawImage(video,0,0,canvas.width,canvas.height);ctx.restore();$('captured').hidden=false;$('progress').textContent='Pose capturada! Agora indique o valor e salve.';$('name').focus()};
@@ -33,7 +59,7 @@ $('copyText').onclick=async()=>{try{await navigator.clipboard.writeText($('compo
 
 let attemptTimer=null;
 function endAttempt(){clearTimeout(attemptTimer);recognizing=false;$('recognition').textContent='Iniciar reconhecimento';$('cameraCard').classList.remove('searching');}
-function startAttempt(){endAttempt();resetResult();$('cameraCard').classList.remove('timeout','recognized');$('recognize').classList.remove('timeout','recognized');recognizing=true;$('cameraCard').classList.add('searching');$('recognition').textContent='Pausar reconhecimento';$('detail').textContent='Mostre o sinal e mantenha a mão estável.';attemptTimer=setTimeout(()=>{endAttempt();resetResult('Vamos tentar novamente?');$('detail').textContent='Não identificamos o sinal em 15 segundos. Ajuste a pose e tente de novo.';$('recognition').textContent='Reconhecer novamente';$('cameraCard').classList.add('timeout');$('recognize').classList.add('timeout');},15000);}
+function startAttempt(){endAttempt();resetResult();$('cameraCard').classList.remove('timeout','recognized');$('recognize').classList.remove('timeout','recognized');recognizing=true;$('cameraCard').classList.add('searching');$('recognition').textContent='Pausar reconhecimento';$('detail').textContent='Alta tolerância ativa. Mostre o sinal e confira a letra antes de adicionar.';attemptTimer=setTimeout(()=>{if(recognizing&&!letterToAdd){$('detail').textContent='Continuo procurando. Ajuste a mão; não é preciso reiniciar.';}},15000);}
 function recognitionSuccess(){clearTimeout(attemptTimer);$('cameraCard').classList.remove('searching');$('cameraCard').classList.add('recognized');$('recognize').classList.add('recognized');$('recognition').textContent='Pausar reconhecimento';}
 const cameraHome=document.querySelector('.workspace');
 $('settingsOpen').onclick=()=>{endAttempt();$('settings').showModal();$('cameraDock').append($('cameraCard'));if(stream)$('video').play().catch(()=>{});selectPanel('signals');};
@@ -58,7 +84,7 @@ function processPrediction(p){
  if(!p){candidate='';streak=0;if(!letterToAdd){$('word').textContent='Aguardando um sinal';$('detail').textContent='Mostre uma letra e mantenha a pose.';}return;}
  if(letterToAdd&&!p.command)return;
  streak=key===candidate?streak+1:1;candidate=key;
- if(streak<6)return;
+ if(streak<(p.command?6:3))return;
  if(p.command){if(letterToAdd)submitLetter('command');else{$('detail').textContent='Faça uma letra antes do gesto de confirmação.';}return;}
  recognitionSuccess();offerLetter(p.name);$('word').textContent=p.name;$('detail').textContent=commandSamples.length?'Faça seu gesto de confirmação ou clique em Adicionar.':'Clique em Adicionar para continuar automaticamente.';$('score').textContent=p.score.toFixed(2);$('bar').style.width=p.score*100+'%';
 }
@@ -67,3 +93,4 @@ $('captureCommand').onclick=()=>{if(!running||!latestHand||performance.now()-lat
 $('saveCommand').onclick=()=>{if(!pendingCommand)return;const previous=commandSamples;commandSamples=[pendingCommand];try{localStorage.setItem('alem-confirm-gesture',JSON.stringify(commandSamples));pendingCommand=null;$('commandCaptured').hidden=true;updateCommandStatus('Gesto salvo! Faça uma letra e depois este gesto para adicionar.');}catch{commandSamples=previous;updateCommandStatus('Não foi possível salvar. Tente novamente.');}};
 $('removeCommand').onclick=()=>{try{localStorage.removeItem('alem-confirm-gesture');commandSamples=[];pendingCommand=null;$('commandCaptured').hidden=true;updateCommandStatus('Gesto desativado. Você pode continuar usando o botão Adicionar.');}catch{updateCommandStatus('Não foi possível desativar o gesto.');}};
 updateCommandStatus();
+
