@@ -84,15 +84,18 @@ let commandSamples=[],pendingCommand=null,releaseKey='',releaseFrames=0;
 try{const saved=JSON.parse(localStorage.getItem('alem-confirm-gesture')||'[]');if(valid([{name:'command',samples:saved}]))commandSamples=saved;}catch{}
 function updateCommandStatus(message){$('commandStatus').textContent=message||(commandSamples.length?'Gesto de confirmação ativo. Faça uma letra e depois este gesto para adicionar.':'Nenhum gesto configurado. Capture um gesto para ativar.');$('removeCommand').disabled=!commandSamples.length;}
 function predictionKey(p){return p?(p.command?'command':'letter:'+p.name):'';}
+let continuousRecognition=true,missingPredictionFrames=0;
+try{continuousRecognition=localStorage.getItem('alem-continuous')!=='false'}catch{}
 function processPrediction(p){
  const key=predictionKey(p);
  if(releaseKey){if(key===releaseKey){releaseFrames=0;return}if(++releaseFrames<3)return;releaseKey='';releaseFrames=0;}
- if(!p){candidate='';streak=0;if(!letterToAdd){$('word').textContent='Aguardando um sinal';$('detail').textContent=(latestHand?(data.some(c=>c.samples.length)?'Mão detectada, mas nenhuma referência correspondeu. Confira seus sinais salvos.':'Nenhum sinal salvo neste navegador. Importe seus dados em Configurações.'):'Mostre apenas uma mão inteira. Aguardo a detecção dos pontos.');}return;}
- if(letterToAdd&&!p.command)return;
+ if(!p){if(continuousRecognition&&++missingPredictionFrames>=5)resetResult();candidate='';streak=0;if(!letterToAdd){$('word').textContent='Aguardando um sinal';$('detail').textContent=(latestHand?(data.some(c=>c.samples.length)?'Mão detectada, mas nenhuma referência correspondeu. Confira seus sinais salvos.':'Nenhum sinal salvo neste navegador. Importe seus dados em Configurações.'):'Mostre apenas uma mão inteira. Aguardo a detecção dos pontos.');}return;}
+ missingPredictionFrames=0;
+ if(letterToAdd&&!p.command&&!continuousRecognition)return;
  streak=key===candidate?streak+1:1;candidate=key;
  if(streak<(p.command?6:3)){if(!letterToAdd){$('word').textContent='Analisando: '+p.name;$('detail').textContent='Mão detectada. Estabilizando o resultado…';}return;}
  if(p.command){if(letterToAdd)submitLetter('command');else{$('detail').textContent='Faça uma letra antes do gesto de confirmação.';}return;}
- recognitionSuccess();offerLetter(p.name);$('word').textContent=p.name;$('detail').textContent=commandSamples.length?'Faça seu gesto de confirmação ou clique em Adicionar.':'Clique em Adicionar para continuar automaticamente.';$('score').textContent=p.score.toFixed(2);$('bar').style.width=p.score*100+'%';
+ recognitionSuccess();offerLetter(p.name);$('word').textContent=p.name;$('detail').textContent=continuousRecognition?'Reconhecimento contínuo ativo. Mude o sinal para atualizar a letra; adicione ao texto quando quiser.':(commandSamples.length?'Faça seu gesto de confirmação ou clique em Adicionar.':'Clique em Adicionar para continuar automaticamente.');$('score').textContent=p.score.toFixed(2);$('bar').style.width=p.score*100+'%';
 }
 function submitLetter(source){if(!letterToAdd)return;const value=letterToAdd;releaseKey=source==='command'?'command':'letter:'+value;releaseFrames=0;$('composition').value+=value;offerLetter('');persistText(`“${value}” adicionado. Faça o próximo sinal.`);if(running)startAttempt();}
 $('captureCommand').onclick=()=>{if(!running||!latestHand||performance.now()-latestTime>750){updateCommandStatus('Ative a câmera e mostre uma mão inteira para capturar.');return;}pendingCommand=features(latestHand);const canvas=$('commandPreview'),ctx=canvas.getContext('2d'),video=$('video');canvas.width=video.videoWidth;canvas.height=video.videoHeight;ctx.save();ctx.translate(canvas.width,0);ctx.scale(-1,1);ctx.drawImage(video,0,0,canvas.width,canvas.height);ctx.restore();$('commandCaptured').hidden=false;updateCommandStatus('Confira a captura e salve para usar como confirmação.');};
@@ -100,4 +103,21 @@ $('saveCommand').onclick=()=>{if(!pendingCommand)return;const previous=commandSa
 $('removeCommand').onclick=()=>{try{localStorage.removeItem('alem-confirm-gesture');commandSamples=[];pendingCommand=null;$('commandCaptured').hidden=true;updateCommandStatus('Gesto desativado. Você pode continuar usando o botão Adicionar.');}catch{updateCommandStatus('Não foi possível desativar o gesto.');}};
 updateCommandStatus();
 
+
+
+const continuousOption=document.createElement('label');
+continuousOption.style.cssText='display:flex;align-items:center;gap:10px;margin:16px 0;font-size:13px;cursor:pointer';
+const continuousCheckbox=document.createElement('input');
+continuousCheckbox.type='checkbox';continuousCheckbox.id='continuousRecognition';
+continuousCheckbox.checked=continuousRecognition;
+continuousCheckbox.style.cssText='width:18px;height:18px;margin:0;flex:none';
+const continuousCaption=document.createElement('span');
+continuousCaption.textContent='Reconhecimento contínuo';
+continuousOption.append(continuousCheckbox,continuousCaption);
+$('recognition').insertAdjacentElement('afterend',continuousOption);
+continuousCheckbox.addEventListener('change',()=>{
+ continuousRecognition=continuousCheckbox.checked;missingPredictionFrames=0;releaseKey='';releaseFrames=0;resetResult();
+ try{localStorage.setItem('alem-continuous',String(continuousRecognition))}catch{}
+ $('detail').textContent=continuousRecognition?'Modo contínuo ativado. Inicie o reconhecimento e mude os sinais livremente.':'Modo individual ativado. Cada letra fica aguardando confirmação.';
+});
 
