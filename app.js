@@ -2,7 +2,7 @@ const $=id=>document.getElementById(id);let data=[],detector,stream,running=fals
 function valid(d){return Array.isArray(d)&&d.length<=30&&d.every(c=>typeof c.name==='string'&&c.name.length>0&&c.name.length<=40&&Array.isArray(c.samples)&&c.samples.length<=2000&&c.samples.every(s=>Array.isArray(s)&&s.length===63&&s.every(n=>typeof n==='number'&&Number.isFinite(n))))}
 function save(){try{localStorage.setItem('signflow-v1',JSON.stringify(data));render();return true}catch{$('progress').textContent='Não foi possível salvar neste navegador. Exporte os dados antes de fechar.';render();return false}}
 function render(){const old=$('classes').value;$('classes').replaceChildren(...data.map((c,i)=>new Option(`${c.name} · ${c.samples.length} captura(s)`,i)));if(data[old])$('classes').value=old;$('count').textContent=data.filter(c=>c.samples.length).length;$('recognition').disabled=!running||!data.some(c=>c.samples.length);$('capture').disabled=!running;$('remove').disabled=!data.length;$('export').disabled=!data.length;if(!recognizing)$('detail').textContent=data.some(c=>c.samples.length)?'Sinais salvos. Ative a câmera e inicie o reconhecimento.':'Salve seu primeiro sinal para começar.'}
-function resetResult(message='Aguardando um sinal'){offerLetter('');$('word').textContent=message;$('score').textContent='—';$('bar').style.width='0';candidate='';streak=0}
+function resetResult(message='Aguardando um sinal'){stableCandidateSince=0;lastPredictionAt=0;showHold(0,'Aguardando um sinal estável.');offerLetter('');$('word').textContent=message;$('score').textContent='—';$('bar').style.width='0';candidate='';streak=0}
 $('help').onclick=()=>$('guide').showModal();
 $('add').onsubmit=e=>{e.preventDefault();const name=$('name').value.trim();if(!name||!pendingPose)return;const existing=data.find(c=>c.name.toLowerCase()===name.toLowerCase());if(existing){if(existing.samples.length>=2000)return alert('Limite de capturas atingido.');existing.samples.push(pendingPose)}else{if(data.length>=30)return alert('Limite de 30 sinais.');data.push({name,samples:[pendingPose]})}const persisted=save();$('classes').value=data.findIndex(c=>c.name.toLowerCase()===name.toLowerCase());pendingPose=null;$('captured').hidden=true;$('name').value='';$('progress').textContent=persisted?`Sinal “${name}” salvo. Capture o próximo ou teste em Reconhecer.`:'Sinal disponível nesta sessão, mas não foi salvo no navegador. Exporte seus dados.'};
 $('discard').onclick=()=>{pendingPose=null;$('captured').hidden=true;$('progress').textContent='Captura descartada. Mostre uma pose e capture novamente.'};
@@ -86,16 +86,51 @@ function updateCommandStatus(message){$('commandStatus').textContent=message||(c
 function predictionKey(p){return p?(p.command?'command':'letter:'+p.name):'';}
 let continuousRecognition=true,missingPredictionFrames=0;
 try{continuousRecognition=localStorage.getItem('alem-continuous')!=='false'}catch{}
+let stableCandidateSince=0,lastPredictionAt=0,noPredictionSince=null;
+const LETTER_HOLD_MS=1100,CONFIRM_HOLD_MS=800;
+function showHold(percent,message){
+ const meter=$('recognitionHold');if(meter)meter.value=percent;
+ const caption=$('recognitionHoldLabel');if(caption)caption.textContent=message;
+}
 function processPrediction(p){
- const key=predictionKey(p);
- if(releaseKey){if(key===releaseKey){releaseFrames=0;return}if(++releaseFrames<3)return;releaseKey='';releaseFrames=0;}
- if(!p){if(continuousRecognition&&++missingPredictionFrames>=5)resetResult();candidate='';streak=0;if(!letterToAdd){$('word').textContent='Aguardando um sinal';$('detail').textContent=(latestHand?(data.some(c=>c.samples.length)?'Mão detectada, mas nenhuma referência correspondeu. Confira seus sinais salvos.':'Nenhum sinal salvo neste navegador. Importe seus dados em Configurações.'):'Mostre apenas uma mão inteira. Aguardo a detecção dos pontos.');}return;}
- missingPredictionFrames=0;
+ const now=performance.now(),key=predictionKey(p);
+ if(releaseKey){
+  stableCandidateSince=0;candidate='';
+  if(key===releaseKey){releaseFrames=0;showHold(0,'Solte o gesto para continuar.');return}
+  if(++releaseFrames<3)return;
+  releaseKey='';releaseFrames=0;
+ }
+ if(!p){
+  candidate='';streak=0;stableCandidateSince=0;lastPredictionAt=0;
+  if(noPredictionSince===null)noPredictionSince=now;
+  showHold(0,letterToAdd?'Letra pronta. Faça o gesto de confirmação.':'Aguardando um sinal estável.');
+  if(continuousRecognition&&now-noPredictionSince>=1800)resetResult();
+  if(!letterToAdd){$('word').textContent='Aguardando um sinal';$('detail').textContent=latestHand?'Mão detectada. Mantenha uma pose cadastrada.':'Mostre uma mão inteira à câmera.';}
+  return;
+ }
+ noPredictionSince=null;missingPredictionFrames=0;
  if(letterToAdd&&!p.command&&!continuousRecognition)return;
- streak=key===candidate?streak+1:1;candidate=key;
- if(streak<(p.command?6:3)){if(!letterToAdd){$('word').textContent='Analisando: '+p.name;$('detail').textContent='Mão detectada. Estabilizando o resultado…';}return;}
- if(p.command){if(letterToAdd)submitLetter('command');else{$('detail').textContent='Faça uma letra antes do gesto de confirmação.';}return;}
- recognitionSuccess();offerLetter(p.name);$('word').textContent=p.name;$('detail').textContent=continuousRecognition?'Reconhecimento contínuo ativo. Mude o sinal para atualizar a letra; adicione ao texto quando quiser.':(commandSamples.length?'Faça seu gesto de confirmação ou clique em Adicionar.':'Clique em Adicionar para continuar automaticamente.');$('score').textContent=p.score.toFixed(2);$('bar').style.width=p.score*100+'%';
+ if(p.command&&!letterToAdd){candidate='';stableCandidateSince=0;showHold(0,'Reconheça uma letra antes de confirmar.');return}
+ if(!p.command&&letterToAdd===p.name){
+  candidate=key;stableCandidateSince=now;lastPredictionAt=now;
+  showHold(100,'Letra pronta. Faça o gesto de confirmação ou mude o sinal.');
+  return;
+ }
+ if(candidate!==key||!lastPredictionAt||now-lastPredictionAt>450){
+  candidate=key;stableCandidateSince=now;streak=0;
+ }
+ lastPredictionAt=now;streak++;
+ const duration=p.command?CONFIRM_HOLD_MS:LETTER_HOLD_MS;
+ const elapsed=now-stableCandidateSince,percent=Math.min(100,Math.floor(elapsed/duration*100));
+ showHold(percent,p.command?'Confirmando a letra… '+percent+'%':'Estabilizando o sinal… '+percent+'%');
+ if(!letterToAdd)$('word').textContent='Analisando o sinal…';
+ $('detail').textContent=p.command?'Mantenha o gesto de confirmação até completar.':'Mantenha o mesmo sinal por cerca de 1 segundo.';
+ if(elapsed<duration||streak<3)return;
+ if(p.command){submitLetter('command');return}
+ recognitionSuccess();offerLetter(p.name);$('word').textContent=p.name;
+ $('detail').textContent=commandSamples.length?'Letra pronta. Faça o gesto de confirmação para salvar.':'Letra pronta. Clique em Adicionar para salvar.';
+ $('score').textContent=p.score.toFixed(2);$('bar').style.width=p.score*100+'%';
+ showHold(100,'Sinal estabilizado.');
 }
 function submitLetter(source){if(!letterToAdd)return;const value=letterToAdd;releaseKey=source==='command'?'command':'letter:'+value;releaseFrames=0;$('composition').value+=value;offerLetter('');persistText(`“${value}” adicionado. Faça o próximo sinal.`);if(running)startAttempt();}
 $('captureCommand').onclick=()=>{if(!running||!latestHand||performance.now()-latestTime>750){updateCommandStatus('Ative a câmera e mostre uma mão inteira para capturar.');return;}pendingCommand=features(latestHand);const canvas=$('commandPreview'),ctx=canvas.getContext('2d'),video=$('video');canvas.width=video.videoWidth;canvas.height=video.videoHeight;ctx.save();ctx.translate(canvas.width,0);ctx.scale(-1,1);ctx.drawImage(video,0,0,canvas.width,canvas.height);ctx.restore();$('commandCaptured').hidden=false;updateCommandStatus('Confira a captura e salve para usar como confirmação.');};
@@ -120,4 +155,15 @@ continuousCheckbox.addEventListener('change',()=>{
  try{localStorage.setItem('alem-continuous',String(continuousRecognition))}catch{}
  $('detail').textContent=continuousRecognition?'Modo contínuo ativado. Inicie o reconhecimento e mude os sinais livremente.':'Modo individual ativado. Cada letra fica aguardando confirmação.';
 });
+
+
+const holdBox=document.createElement('div');
+holdBox.style.cssText='margin:16px 0;text-align:left';
+const holdLabel=document.createElement('div');
+holdLabel.id='recognitionHoldLabel';holdLabel.textContent='Mantenha a letra por cerca de 1 segundo.';
+holdLabel.style.cssText='font-size:12px;margin-bottom:8px';
+const holdMeter=document.createElement('progress');holdMeter.id='recognitionHold';
+holdMeter.max=100;holdMeter.value=0;holdMeter.setAttribute('aria-label','Estabilização do sinal');
+holdMeter.style.cssText='width:100%;height:8px;accent-color:var(--primary,#69508f)';
+holdBox.append(holdLabel,holdMeter);$('recognition').insertAdjacentElement('beforebegin',holdBox);
 
